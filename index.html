@@ -1,0 +1,1230 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>2002 제16대 대통령 선거 시뮬레이터</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Font Awesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Pretendard:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  
+  <!-- Firebase SDKs -->
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
+
+  <!-- React & ReactDOM CDN -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <!-- Babel for JSX compilation -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <style>
+    body {
+      font-family: 'Pretendard', sans-serif;
+    }
+    .custom-scroll::-webkit-scrollbar {
+      width: 6px;
+    }
+    .custom-scroll::-webkit-scrollbar-track {
+      background: rgba(241, 241, 241, 0.5);
+      border-radius: 4px;
+    }
+    .custom-scroll::-webkit-scrollbar-thumb {
+      background: #cbd5e1;
+      border-radius: 4px;
+    }
+    .custom-scroll::-webkit-scrollbar-thumb:hover {
+      background: #94a3b8;
+    }
+    .transition-all-300 {
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    /* SVG Map hover highlight effect */
+    .map-province {
+      cursor: pointer;
+      stroke: #ffffff;
+      stroke-width: 1.5;
+      transition: all 0.2s ease-in-out;
+    }
+    .map-province:hover {
+      stroke: #111827;
+      stroke-width: 3;
+      filter: drop-shadow(0 4px 6px rgba(0, 0, 0, 0.15));
+    }
+    .map-province-selected {
+      stroke: #ef4444 !important;
+      stroke-width: 3.5 !important;
+      filter: drop-shadow(0 4px 10px rgba(239, 68, 68, 0.3)) !important;
+    }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-900 min-h-screen">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useMemo, useRef } = React;
+
+    // --- Firebase & App Configuration Initialization ---
+    const appId = typeof __app_id !== 'undefined' ? __app_id : 'election-2002-simulator';
+    let db = null;
+    let auth = null;
+
+    if (typeof __firebase_config !== 'undefined' && __firebase_config) {
+      try {
+        const firebaseConfig = JSON.parse(__firebase_config);
+        if (!firebase.apps.length) {
+          firebase.initializeApp(firebaseConfig);
+        }
+        db = firebase.firestore();
+        auth = firebase.auth();
+      } catch (e) {
+        console.error("Firebase 초기화 에러:", e);
+      }
+    }
+
+    // --- 2002 대한민국 16개 시도 2002년 투표수 (선거 가중치용 실제 개표 투표수 데이터) ---
+    // 총합 약 24,784,971표
+    const PROVINCE_INFO = {
+      Seoul:     { name: "서울특별시", voters: 5098413, short: "서울" },
+      Gyeonggi:  { name: "경기도", voters: 4756664, short: "경기" },
+      Incheon:   { name: "인천광역시", voters: 1218527, short: "인천" },
+      Busan:     { name: "부산광역시", voters: 1847133, short: "부산" },
+      Daegu:     { name: "대구광역시", voters: 1215907, short: "대구" },
+      Gwangju:   { name: "광주광역시", voters: 722397, short: "광주" },
+      Daejeon:   { name: "대전광역시", voters: 692308, short: "대전" },
+      Ulsan:     { name: "울산광역시", voters: 512189, short: "울산" },
+      Gangwon:   { name: "강원도", voters: 766857, short: "강원" },
+      Chungbuk:  { name: "충청북도", voters: 736045, short: "충북" },
+      Chungnam:  { name: "충청남도", voters: 928521, short: "충남" },
+      Jeonbuk:   { name: "전라북도", voters: 1012390, short: "전북" },
+      Jeonnam:   { name: "전라남도", voters: 1093820, short: "전남" },
+      Gyeongbuk: { name: "경상북도", voters: 1399737, short: "경북" },
+      Gyeongnam: { name: "경상남도", voters: 1515671, short: "경남" },
+      Jeju:      { name: "제주도", voters: 268693, short: "제주" }
+    };
+
+    // --- 시나리오 A: 역사적 실존 데이터 (노무현 후보 기준) ---
+    const HISTORICAL_ROH_DATA = {
+      Seoul:     { mdp: 49.3, gnp: 47.1, dlp: 3.1, oth: 0.5 },
+      Gyeonggi:  { mdp: 52.1, gnp: 42.4, dlp: 4.8, oth: 0.7 },
+      Incheon:   { mdp: 51.7, gnp: 43.3, dlp: 4.7, oth: 0.3 },
+      Busan:     { mdp: 30.4, gnp: 65.9, dlp: 3.5, oth: 0.2 },
+      Daegu:     { mdp: 19.2, gnp: 77.2, dlp: 3.3, oth: 0.3 },
+      Gwangju:   { mdp: 95.9, gnp: 2.9,  dlp: 1.0, oth: 0.2 },
+      Daejeon:   { mdp: 55.5, gnp: 39.7, dlp: 4.6, oth: 0.2 },
+      Ulsan:     { mdp: 38.7, gnp: 47.7, dlp: 13.1, oth: 0.5 },
+      Gangwon:   { mdp: 40.8, gnp: 53.2, dlp: 5.3, oth: 0.7 },
+      Chungbuk:  { mdp: 49.3, gnp: 44.9, dlp: 5.1, oth: 0.7 },
+      Chungnam:  { mdp: 52.5, gnp: 43.2, dlp: 4.0, oth: 0.3 },
+      Jeonbuk:   { mdp: 92.8, gnp: 5.5,  dlp: 1.5, oth: 0.2 },
+      Jeonnam:   { mdp: 95.3, gnp: 3.4,  dlp: 0.9, oth: 0.4 },
+      Gyeongbuk: { mdp: 23.5, gnp: 70.9, dlp: 5.2, oth: 0.4 },
+      Gyeongnam: { mdp: 30.6, gnp: 62.7, dlp: 6.2, oth: 0.5 },
+      Jeju:      { mdp: 57.5, gnp: 38.9, dlp: 3.1, oth: 0.5 }
+    };
+
+    // --- 시나리오 B: 이인제 후보 출마 가상 시나리오 (예측 데이터 모델) ---
+    // 특징: 충청 및 경기에서 강력한 득표 상승, 단 호남 대거 이탈 및 진보층의 민주노동당(권영길) 결집 경향 반영
+    const HYPOTHETICAL_RHEE_DATA = {
+      Seoul:     { mdp: 44.2, gnp: 49.5, dlp: 5.5, oth: 0.8 },
+      Gyeonggi:  { mdp: 48.5, gnp: 44.1, dlp: 6.6, oth: 0.8 },
+      Incheon:   { mdp: 44.8, gnp: 47.2, dlp: 7.2, oth: 0.8 },
+      Busan:     { mdp: 21.3, gnp: 71.5, dlp: 6.7, oth: 0.5 },
+      Daegu:     { mdp: 12.8, gnp: 82.5, dlp: 4.2, oth: 0.5 },
+      Gwangju:   { mdp: 73.2, gnp: 11.2, dlp: 14.3, oth: 1.3 }, // 호남의 민주당 결집도 하락 및 권영길 급등
+      Daejeon:   { mdp: 63.8, gnp: 31.2, dlp: 4.5, oth: 0.5 }, // 이인제 고향 충청권 대폭발
+      Ulsan:     { mdp: 25.4, gnp: 52.8, dlp: 21.0, oth: 0.8 },
+      Gangwon:   { mdp: 33.5, gnp: 58.7, dlp: 7.1, oth: 0.7 },
+      Chungbuk:  { mdp: 57.1, gnp: 36.5, dlp: 5.6, oth: 0.8 },
+      Chungnam:  { mdp: 68.2, gnp: 27.5, dlp: 3.8, oth: 0.5 }, // 고향인 충남에서 압도적 득표
+      Jeonbuk:   { mdp: 68.5, gnp: 13.5, dlp: 16.5, oth: 1.5 },
+      Jeonnam:   { mdp: 70.1, gnp: 11.8, dlp: 16.8, oth: 1.3 },
+      Gyeongbuk: { mdp: 15.6, gnp: 77.5, dlp: 6.3, oth: 0.6 },
+      Gyeongnam: { mdp: 21.1, gnp: 68.2, dlp: 10.1, oth: 0.6 },
+      Jeju:      { mdp: 46.2, gnp: 47.5, dlp: 5.5, oth: 0.8 }
+    };
+
+    function App() {
+      // --- 국가 및 당파 색상 ---
+      const colors = {
+        mdp: "#00AA7B", // 새천년민주당 청록
+        gnp: "#0000A8", // 한나라당 청색
+        dlp: "#EE7700", // 민주노동당 주황
+        oth: "#6B7280"  // 기타 회색
+      };
+
+      // --- 상태 정의 ---
+      const [mdpCandidate, setMdpCandidate] = useState("roh"); // 'roh' (노무현) 또는 'rhee' (이인제)
+      const [provinceState, setProvinceState] = useState({ ...HISTORICAL_ROH_DATA });
+      const [selectedProvId, setSelectedProvId] = useState("Seoul");
+      
+      // 전국 통합 스윙 상태
+      const [globalMdpSwing, setGlobalMdpSwing] = useState(0);
+      const [globalGnpSwing, setGlobalGnpSwing] = useState(0);
+      const [globalDlpSwing, setGlobalDlpSwing] = useState(0);
+
+      // 클라우드 기능 상태
+      const [user, setUser] = useState(null);
+      const [scenarioTitle, setScenarioTitle] = useState("");
+      const [savedScenarios, setSavedScenarios] = useState([]);
+      const [loadingScenarios, setLoadingScenarios] = useState(false);
+      const [saveModalOpen, setSaveModalOpen] = useState(false);
+      const [alertMessage, setAlertMessage] = useState(null);
+
+      // --- Firebase Auth & 익명 로그인 ---
+      useEffect(() => {
+        if (!auth) return;
+        const initAuth = async () => {
+          try {
+            if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+              await auth.signInWithCustomToken(__initial_auth_token);
+            } else {
+              await auth.signInAnonymously();
+            }
+          } catch (err) {
+            console.error("Auth 인증 에러:", err);
+          }
+        };
+        initAuth();
+        const unsubscribe = auth.onAuthStateChanged((usr) => {
+          if (usr) {
+            setUser(usr);
+          }
+        });
+        return () => unsubscribe();
+      }, []);
+
+      // --- 시나리오 불러오기 ---
+      useEffect(() => {
+        if (!db || !user) return;
+        const fetchScenarios = async () => {
+          setLoadingScenarios(true);
+          try {
+            // RULE 1: Strict Paths, RULE 2: No Complex Queries
+            const colRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('scenarios');
+            colRef.onSnapshot((snapshot) => {
+              const list = [];
+              snapshot.forEach((doc) => {
+                list.push({ id: doc.id, ...doc.data() });
+              });
+              setSavedScenarios(list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)));
+              setLoadingScenarios(false);
+            }, (err) => {
+              console.error("Firestore 실시간 수신 실패:", err);
+              setLoadingScenarios(false);
+            });
+          } catch (e) {
+            console.error("시나리오 목록 페치 실패:", e);
+            setLoadingScenarios(false);
+          }
+        };
+        fetchScenarios();
+      }, [user]);
+
+      // --- 후보자 전환 시 기본 데이터 설정 ---
+      useEffect(() => {
+        if (mdpCandidate === "roh") {
+          setProvinceState({ ...HISTORICAL_ROH_DATA });
+        } else {
+          setProvinceState({ ...HYPOTHETICAL_RHEE_DATA });
+        }
+        // 글로벌 스윙 초기화
+        setGlobalMdpSwing(0);
+        setGlobalGnpSwing(0);
+        setGlobalDlpSwing(0);
+      }, [mdpCandidate]);
+
+      // --- 알림 표시 헬퍼 ---
+      const showAlert = (message, type = "success") => {
+        setAlertMessage({ text: message, type });
+        setTimeout(() => setAlertMessage(null), 4000);
+      };
+
+      // --- 데이터 복제 및 스윙 계산 ---
+      // 시도별 득표율에 전역 스윙을 반영하여 실시간 최종 연산 데이터 생성
+      const calculatedData = useMemo(() => {
+        const finalData = {};
+        Object.keys(provinceState).forEach(prov => {
+          const base = provinceState[prov];
+          // 스윙값 적용
+          let mdp = Math.max(0, Math.min(100, base.mdp + globalMdpSwing));
+          let gnp = Math.max(0, Math.min(100, base.gnp + globalGnpSwing));
+          let dlp = Math.max(0, Math.min(100, base.dlp + globalDlpSwing));
+          let oth = base.oth;
+
+          const currentSum = mdp + gnp + dlp;
+          const targetSum = 100 - oth;
+
+          // 100% 한도 초과 및 이탈 방지를 위한 노멀라이즈 적용
+          if (currentSum > 0 && Math.abs(currentSum - targetSum) > 0.01) {
+            const ratio = targetSum / currentSum;
+            mdp = Number((mdp * ratio).toFixed(2));
+            gnp = Number((gnp * ratio).toFixed(2));
+            dlp = Number((dlp * ratio).toFixed(2));
+          }
+
+          finalData[prov] = { mdp, gnp, dlp, oth };
+        });
+        return finalData;
+      }, [provinceState, globalMdpSwing, globalGnpSwing, globalDlpSwing]);
+
+      // --- 전국 총계 계산 ---
+      const nationalTotals = useMemo(() => {
+        let mdpVotes = 0;
+        let gnpVotes = 0;
+        let dlpVotes = 0;
+        let othVotes = 0;
+        let totalVotes = 0;
+
+        Object.keys(calculatedData).forEach(prov => {
+          const voters = PROVINCE_INFO[prov].voters;
+          const data = calculatedData[prov];
+
+          mdpVotes += voters * (data.mdp / 100);
+          gnpVotes += voters * (data.gnp / 100);
+          dlpVotes += voters * (data.dlp / 100);
+          othVotes += voters * (data.oth / 100);
+          totalVotes += voters;
+        });
+
+        const mdpPct = (mdpVotes / totalVotes) * 100;
+        const gnpPct = (gnpVotes / totalVotes) * 100;
+        const dlpPct = (dlpVotes / totalVotes) * 100;
+        const othPct = (othVotes / totalVotes) * 100;
+
+        // 최다 승리 지역 수 구하기
+        let mdpWins = 0;
+        let gnpWins = 0;
+        let dlpWins = 0;
+
+        Object.keys(calculatedData).forEach(prov => {
+          const d = calculatedData[prov];
+          const max = Math.max(d.mdp, d.gnp, d.dlp);
+          if (max === d.mdp) mdpWins++;
+          else if (max === d.gnp) gnpWins++;
+          else if (max === d.dlp) dlpWins++;
+        });
+
+        // 최종 승리 후보
+        let winnerName = "";
+        let winnerColor = "";
+        let winnerParty = "";
+        const maxPct = Math.max(mdpPct, gnpPct, dlpPct);
+        if (maxPct === mdpPct) {
+          winnerName = mdpCandidate === "roh" ? "노무현" : "이인제";
+          winnerColor = colors.mdp;
+          winnerParty = "새천년민주당";
+        } else if (maxPct === gnpPct) {
+          winnerName = "이회창";
+          winnerColor = colors.gnp;
+          winnerParty = "한나라당";
+        } else {
+          winnerName = "권영길";
+          winnerColor = colors.dlp;
+          winnerParty = "민주노동당";
+        }
+
+        return {
+          mdpVotes, gnpVotes, dlpVotes, othVotes, totalVotes,
+          mdpPct, gnpPct, dlpPct, othPct,
+          mdpWins, gnpWins, dlpWins,
+          winnerName, winnerColor, winnerParty
+        };
+      }, [calculatedData, mdpCandidate]);
+
+      // --- 개별 시도 슬라이더 변경 처리 함수 (노멀라이징 적용) ---
+      const handleSinglePercentChange = (party, value) => {
+        const val = parseFloat(value) || 0;
+        const currentData = { ...provinceState[selectedProvId] };
+        
+        currentData[party] = val;
+        
+        // 조율하고 남은 값 구하기
+        const otherParties = ['mdp', 'gnp', 'dlp'].filter(p => p !== party);
+        const fixedSum = val + currentData.oth;
+        const availablePct = 100 - fixedSum;
+
+        const currentOtherSum = currentData[otherParties[0]] + currentData[otherParties[1]];
+        if (currentOtherSum > 0) {
+          const r1 = currentData[otherParties[0]] / currentOtherSum;
+          const r2 = currentData[otherParties[1]] / currentOtherSum;
+          currentData[otherParties[0]] = parseFloat(Math.max(0, availablePct * r1).toFixed(2));
+          currentData[otherParties[1]] = parseFloat(Math.max(0, availablePct * r2).toFixed(2));
+        } else {
+          currentData[otherParties[0]] = parseFloat((availablePct / 2).toFixed(2));
+          currentData[otherParties[1]] = parseFloat((availablePct / 2).toFixed(2));
+        }
+
+        setProvinceState(prev => ({
+          ...prev,
+          [selectedProvId]: currentData
+        }));
+      };
+
+      // --- 시나리오 리셋 ---
+      const handleReset = () => {
+        if (mdpCandidate === "roh") {
+          setProvinceState({ ...HISTORICAL_ROH_DATA });
+        } else {
+          setProvinceState({ ...HYPOTHETICAL_RHEE_DATA });
+        }
+        setGlobalMdpSwing(0);
+        setGlobalGnpSwing(0);
+        setGlobalDlpSwing(0);
+        showAlert("선택한 후보의 기본 데이터로 초기화되었습니다.");
+      };
+
+      // --- 시나리오 공유 저장 (클라우드 파이어스토어) ---
+      const handleSaveScenario = async () => {
+        if (!scenarioTitle.trim()) {
+          showAlert("시나리오 제목을 입력해주세요.", "error");
+          return;
+        }
+        if (!db || !user) {
+          showAlert("온라인 서버와 연동되지 않았습니다.", "error");
+          return;
+        }
+
+        try {
+          const pathRef = db.collection('artifacts').doc(appId).collection('public').doc('data').collection('scenarios');
+          await pathRef.add({
+            title: scenarioTitle,
+            mdpCandidate,
+            globalMdpSwing,
+            globalGnpSwing,
+            globalDlpSwing,
+            provinceState,
+            createdAt: Date.now(),
+            author: user.uid,
+            winnerName: nationalTotals.winnerName,
+            winnerParty: nationalTotals.winnerParty,
+            nationalMdp: nationalTotals.mdpPct.toFixed(1),
+            nationalGnp: nationalTotals.gnpPct.toFixed(1)
+          });
+          setScenarioTitle("");
+          setSaveModalOpen(false);
+          showAlert("나만의 IF 대선 시나리오가 서버에 저장되어 목록에 공개되었습니다!");
+        } catch (e) {
+          console.error("저장 에러:", e);
+          showAlert("저장 중 오류가 발생했습니다.", "error");
+        }
+      };
+
+      // --- 저장된 시나리오 로드 ---
+      const loadScenario = (sc) => {
+        setMdpCandidate(sc.mdpCandidate);
+        // 타이밍 차이 대비 데이터를 객체로 설정
+        setTimeout(() => {
+          setProvinceState(sc.provinceState);
+          setGlobalMdpSwing(sc.globalMdpSwing || 0);
+          setGlobalGnpSwing(sc.globalGnpSwing || 0);
+          setGlobalDlpSwing(sc.globalDlpSwing || 0);
+        }, 50);
+        showAlert(`'${sc.title}' 시나리오를 불러왔습니다!`);
+      };
+
+      // --- 프리셋 시나리오 로드 ---
+      const applyPreset = (type) => {
+        if (type === 'lee_landslide') {
+          // 이회창 압승 시나리오 (보수 대결집)
+          const updated = {};
+          Object.keys(provinceState).forEach(prov => {
+            const raw = provinceState[prov];
+            updated[prov] = {
+              mdp: Math.max(0, raw.mdp - 10),
+              gnp: Math.min(100, raw.gnp + 11),
+              dlp: raw.dlp,
+              oth: raw.oth
+            };
+          });
+          setProvinceState(updated);
+          showAlert("한나라당 이회창 후보 압승 시나리오가 적용되었습니다.");
+        } else if (type === 'prog_unite') {
+          // 진보 대통합 (권영길 사퇴 및 민주당 지지선언 가상 모델)
+          const updated = {};
+          Object.keys(provinceState).forEach(prov => {
+            const raw = provinceState[prov];
+            updated[prov] = {
+              mdp: Math.min(100, raw.mdp + raw.dlp * 0.8), // 권영길 지지층 80% 흡수
+              gnp: raw.gnp,
+              dlp: Math.max(0, raw.dlp * 0.2),
+              oth: raw.oth
+            };
+          });
+          setProvinceState(updated);
+          showAlert("진보 대통합 시나리오가 적용되었습니다.");
+        }
+      };
+
+      // --- SVG 컬러 구하는 헬퍼 함수 ---
+      const getProvinceColor = (provId) => {
+        const d = calculatedData[provId];
+        if (!d) return "#CBD5E1";
+        const max = Math.max(d.mdp, d.gnp, d.dlp);
+        
+        // 투명도/밝기 비율 결정하기 (두 후보 간 격차에 비례해 컬러 강도 조절)
+        let primaryColor = colors.oth;
+        let margin = 0;
+
+        if (max === d.mdp) {
+          primaryColor = colors.mdp;
+          margin = d.mdp - Math.max(d.gnp, d.dlp);
+        } else if (max === d.gnp) {
+          primaryColor = colors.gnp;
+          margin = d.gnp - Math.max(d.mdp, d.dlp);
+        } else if (max === d.dlp) {
+          primaryColor = colors.dlp;
+          margin = d.dlp - Math.max(d.mdp, d.gnp);
+        }
+
+        // 득표율 격차 마진에 따른 색상 강조도 (최대 격차 40 기준)
+        const opacity = Math.min(0.95, Math.max(0.35, margin / 40));
+        return hexToRgba(primaryColor, opacity);
+      };
+
+      // HEX 색상을 RGBA로 변환하는 유틸리티
+      const hexToRgba = (hex, opacity) => {
+        let c;
+        if(/^#([A-Fa-f0-9]{3}){1,2}$/.test(hex)){
+          c = hex.substring(1).split('');
+          if(c.length === 3){
+            c = [c[0], c[0], c[1], c[1], c[2], c[2]];
+          }
+          c = '0x' + c.join('');
+          return `rgba(${(c>>16)&255}, ${(c>>8)&255}, ${c&255}, ${opacity})`;
+        }
+        return hex;
+      };
+
+      return (
+        <div class="max-w-7xl mx-auto px-4 py-8">
+          
+          {/* 토스트 알림창 */}
+          {alertMessage && (
+            <div class={`fixed top-5 right-5 z-50 flex items-center gap-3 px-5 py-4 rounded-xl shadow-2xl transition-all duration-300 border ${
+              alertMessage.type === 'error' ? 'bg-red-50 border-red-200 text-red-800' : 'bg-teal-50 border-teal-200 text-teal-800'
+            }`}>
+              <i class={`fa-solid ${alertMessage.type === 'error' ? 'fa-triangle-exclamation text-red-500' : 'fa-circle-check text-teal-500'} text-xl`}></i>
+              <span class="font-semibold text-sm">{alertMessage.text}</span>
+            </div>
+          )}
+
+          {/* 헤더 구역 */}
+          <header class="bg-white rounded-3xl p-6 lg:p-8 shadow-sm border border-slate-100 mb-8 flex flex-col md:flex-row md:items-center md:justify-between gap-6">
+            <div>
+              <div class="inline-flex items-center gap-2 px-3 py-1 bg-teal-50 text-teal-700 text-xs font-bold rounded-full mb-3 uppercase tracking-wider">
+                <i class="fa-solid fa-hourglass-half"></i> 2002년 제16대 대선 가상 시뮬레이터
+              </div>
+              <h1 class="text-3xl font-extrabold text-slate-900 tracking-tight leading-none">
+                2002 대선 IF 시뮬레이터
+              </h1>
+              <p class="text-slate-500 text-sm mt-2 font-medium">
+                노무현 후보와 이인제 후보가 맞붙었을 경우, 대선의 판도는 어떻게 바뀌었을까요? 지역별 데이터를 만져보고 대선 결과를 예측하세요.
+              </p>
+            </div>
+
+            {/* 후보 선택 카드 스위치 */}
+            <div class="flex flex-col gap-2 min-w-[280px]">
+              <span class="text-xs font-bold text-slate-500 ml-1">
+                새천년민주당 대선 주자 선택
+              </span>
+              <div class="grid grid-cols-2 gap-2 bg-slate-100 p-1.5 rounded-2xl">
+                <button 
+                  onClick={() => setMdpCandidate("roh")}
+                  class={`flex items-center justify-center gap-2 py-3 rounded-xl text-sm font-bold transition-all-300 ${
+                    mdpCandidate === 'roh' 
+                      ? 'bg-white shadow text-emerald-700' 
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                  }`}
+                >
+                  <i class="fa-solid fa-signature"></i>
+                  노무현 (실제)
+                </button>
+                <button 
+                  onClick={() => setMdpCandidate("rhee")}
+                  class={`flex items-center justify-center gap-2 py-3 rounded-xl text-sm font-bold transition-all-300 ${
+                    mdpCandidate === 'rhee' 
+                      ? 'bg-white shadow text-emerald-700' 
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                  }`}
+                >
+                  <i class="fa-solid fa-shuffle"></i>
+                  이인제 (가상)
+                </button>
+              </div>
+            </div>
+          </header>
+
+          {/* 종합 선거 상황 판넬 */}
+          <section class="grid grid-cols-1 lg:grid-cols-4 gap-6 mb-8">
+            {/* 최종 전국 결과 배너 */}
+            <div class="lg:col-span-1 bg-slate-900 text-white rounded-3xl p-6 shadow-xl flex flex-col justify-between relative overflow-hidden">
+              <div class="absolute -right-8 -bottom-8 opacity-10 text-9xl">
+                <i class="fa-solid fa-vote-yea"></i>
+              </div>
+              <div class="z-10">
+                <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400">당선인 시뮬레이션 결과</h3>
+                <div class="mt-4 flex items-baseline gap-1.5">
+                  <span class="text-4xl font-extrabold tracking-tight" style={{ color: nationalTotals.winnerColor }}>
+                    {nationalTotals.winnerName}
+                  </span>
+                  <span class="text-lg font-bold text-slate-300">당선</span>
+                </div>
+                <div class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold mt-2 bg-white/10 text-white">
+                  <span class="w-2 h-2 rounded-full" style={{ backgroundColor: nationalTotals.winnerColor }} />
+                  {nationalTotals.winnerParty}
+                </div>
+              </div>
+
+              <div class="mt-8 pt-4 border-t border-slate-800 z-10">
+                <div class="flex justify-between items-center text-sm font-medium text-slate-400">
+                  <span>총 개표율</span>
+                  <span class="text-white font-bold">100.0%</span>
+                </div>
+                <div class="flex justify-between items-center text-sm font-medium mt-2 text-slate-400">
+                  <span>투표 가중치 합산</span>
+                  <span class="text-white font-semibold">{(nationalTotals.totalVotes / 1000000).toFixed(2)}M 표</span>
+                </div>
+              </div>
+            </div>
+
+            {/* 정당별 스코어 보드 */}
+            <div class="lg:col-span-3 bg-white rounded-3xl p-6 shadow-sm border border-slate-100 grid grid-cols-1 md:grid-cols-3 gap-6">
+              
+              {/* 새천년민주당 */}
+              <div class="flex flex-col justify-between p-4 bg-emerald-50/50 rounded-2xl border border-emerald-100/40">
+                <div>
+                  <div class="flex justify-between items-start">
+                    <span class="text-xs font-bold text-emerald-800">새천년민주당</span>
+                    <span class="text-[10px] font-bold text-white bg-[#00AA7B] px-1.5 py-0.5 rounded">기호 2</span>
+                  </div>
+                  <h4 class="text-2xl font-black text-slate-800 mt-2">
+                    {mdpCandidate === "roh" ? "노무현" : "이인제"}
+                  </h4>
+                  <div class="text-sm text-slate-500 font-medium mt-1">
+                    {(nationalTotals.mdpVotes / 1000000).toFixed(2)}M 표 획득
+                  </div>
+                </div>
+                <div class="mt-6">
+                  <div class="flex justify-between items-end mb-1">
+                    <span class="text-xs text-slate-400 font-medium">득표율 / 우세 지역수</span>
+                    <span class="text-lg font-black text-emerald-700">{nationalTotals.mdpPct.toFixed(2)}% <span class="text-xs font-normal">({nationalTotals.mdpWins}곳)</span></span>
+                  </div>
+                  <div class="w-full bg-slate-200 h-2.5 rounded-full overflow-hidden">
+                    <div class="h-full rounded-full transition-all duration-500" style={{ backgroundColor: colors.mdp, width: `${nationalTotals.mdpPct}%` }} />
+                  </div>
+                </div>
+              </div>
+
+              {/* 한나라당 */}
+              <div class="flex flex-col justify-between p-4 bg-blue-50/50 rounded-2xl border border-blue-100/40">
+                <div>
+                  <div class="flex justify-between items-start">
+                    <span class="text-xs font-bold text-blue-800">한나라당</span>
+                    <span class="text-[10px] font-bold text-white bg-[#0000A8] px-1.5 py-0.5 rounded">기호 1</span>
+                  </div>
+                  <h4 class="text-2xl font-black text-slate-800 mt-2">이회창</h4>
+                  <div class="text-sm text-slate-500 font-medium mt-1">
+                    {(nationalTotals.gnpVotes / 1000000).toFixed(2)}M 표 획득
+                  </div>
+                </div>
+                <div class="mt-6">
+                  <div class="flex justify-between items-end mb-1">
+                    <span class="text-xs text-slate-400 font-medium">득표율 / 우세 지역수</span>
+                    <span class="text-lg font-black text-blue-700">{nationalTotals.gnpPct.toFixed(2)}% <span class="text-xs font-normal">({nationalTotals.gnpWins}곳)</span></span>
+                  </div>
+                  <div class="w-full bg-slate-200 h-2.5 rounded-full overflow-hidden">
+                    <div class="h-full rounded-full transition-all duration-500" style={{ backgroundColor: colors.gnp, width: `${nationalTotals.gnpPct}%` }} />
+                  </div>
+                </div>
+              </div>
+
+              {/* 민주노동당 */}
+              <div class="flex flex-col justify-between p-4 bg-orange-50/50 rounded-2xl border border-orange-100/40">
+                <div>
+                  <div class="flex justify-between items-start">
+                    <span class="text-xs font-bold text-orange-800">민주노동당</span>
+                    <span class="text-[10px] font-bold text-white bg-[#EE7700] px-1.5 py-0.5 rounded">기호 3</span>
+                  </div>
+                  <h4 class="text-2xl font-black text-slate-800 mt-2">권영길</h4>
+                  <div class="text-sm text-slate-500 font-medium mt-1">
+                    {(nationalTotals.dlpVotes / 1000000).toFixed(2)}M 표 획득
+                  </div>
+                </div>
+                <div class="mt-6">
+                  <div class="flex justify-between items-end mb-1">
+                    <span class="text-xs text-slate-400 font-medium">득표율 / 우세 지역수</span>
+                    <span class="text-lg font-black text-orange-700">{nationalTotals.dlpPct.toFixed(2)}% <span class="text-xs font-normal">({nationalTotals.dlpWins}곳)</span></span>
+                  </div>
+                  <div class="w-full bg-slate-200 h-2.5 rounded-full overflow-hidden">
+                    <div class="h-full rounded-full transition-all duration-500" style={{ backgroundColor: colors.dlp, width: `${nationalTotals.dlpPct}%` }} />
+                  </div>
+                </div>
+              </div>
+
+            </div>
+          </section>
+
+          {/* 메인 에디터 및 지도 배치 레이아웃 */}
+          <main class="grid grid-cols-1 lg:grid-cols-12 gap-8 mb-8">
+            
+            {/* 좌측: 인터랙티브 행정구역 지도 (5단 크기) */}
+            <section class="lg:col-span-5 bg-white rounded-3xl p-6 shadow-sm border border-slate-100 flex flex-col items-center justify-between">
+              <div class="w-full flex justify-between items-center border-b border-slate-100 pb-3 mb-4">
+                <span class="text-sm font-bold text-slate-700"><i class="fa-solid fa-map-location-dot"></i> 시도별 우세 지도</span>
+                <span class="text-xs text-slate-500 font-medium">지도를 클릭하여 지역을 활성화하세요</span>
+              </div>
+
+              {/* 2002년 대선 시도 지도 벡터 그래픽 */}
+              <div class="relative w-full max-w-[360px] h-[480px]">
+                <svg viewBox="0 0 500 650" class="w-full h-full select-none">
+                  {/* 강원도 */}
+                  <path d="M 210,130 L 250,80 L 320,110 L 330,170 L 310,230 L 260,210 Z" 
+                    fill={getProvinceColor("Gangwon")} 
+                    onClick={() => setSelectedProvId("Gangwon")}
+                    class={`map-province ${selectedProvId === 'Gangwon' ? 'map-province-selected' : ''}`}
+                  />
+                  {/* 경기도 */}
+                  <path d="M 140,110 L 210,130 L 220,200 L 195,210 L 190,230 L 160,230 L 130,200 L 130,140 Z" 
+                    fill={getProvinceColor("Gyeonggi")} 
+                    onClick={() => setSelectedProvId("Gyeonggi")}
+                    class={`map-province ${selectedProvId === 'Gyeonggi' ? 'map-province-selected' : ''}`}
+                  />
+                  {/* 서울특별시 */}
+                  <path d="M 160,160 L 185,160 L 185,185 L 160,185 Z" 
+                    fill={getProvinceColor("Seoul")} 
+                    onClick={() => setSelectedProvId("Seoul")}
+                    class={`map-province ${selectedProvId === 'Seoul' ? 'map-province-selected' : ''}`}
+                  />
+                  {/* 인천광역시 */}
+                  <path d="M 115,170 L 130,170 L 130,195 L 115,195 Z" 
+                    fill={getProvinceColor("Incheon")} 
+                    onClick={() => setSelectedProvId("Incheon")}
+                    class={`map-province ${selectedProvId === 'Incheon' ? 'map-province-selected' : ''}`}
+                  />
+                  {/* 충청북도 */}
+                  <path d="M 195,215 L 260,210 L 290,280 L 260,330 L 210,310 Z" 
+                    fill={getProvinceColor("Chungbuk")} 
+                    onClick={() => setSelectedProvId("Chungbuk")}
+                    class={`map-province ${selectedProvId === 'Chungbuk' ? 'map-province-selected' : ''}`}
+                  />
+                  {/* 충청남도 */}
+                  <path d="M 110,230 L 160,230 L 190,230 L 190,290 L 150,330 L 105,290 Z" 
+                    fill={getProvinceColor("Chungnam")} 
+                    onClick={() => setSelectedProvId("Chungnam")}
+                    class={`map-province ${selectedProvId === 'Chungnam' ? 'map-province-selected' : ''}`}
+                  />
+                  {/* 대전광역시 */}
+                  <path d="M 180,285 L 205,285 L 205,310 L 180,310 Z" 
+                    fill={getProvinceColor("Daejeon")} 
+                    onClick={() => setSelectedProvId("Daejeon")}
+                    class={`map-province ${selectedProvId === 'Daejeon' ? 'map-province-selected' : ''}`}
+                  />
+                  {/* 전라북도 */}
+                  <path d="M 110,330 L 210,320 L 230,390 L 150,420 L 120,380 Z" 
+                    fill={getProvinceColor("Jeonbuk")} 
+                    onClick={() => setSelectedProvId("Jeonbuk")}
+                    class={`map-province ${selectedProvId === 'Jeonbuk' ? 'map-province-selected' : ''}`}
+                  />
+                  {/* 전라남도 */}
+                  <path d="M 90,420 L 150,420 L 180,430 L 210,480 L 190,540 L 100,530 Z" 
+                    fill={getProvinceColor("Jeonnam")} 
+                    onClick={() => setSelectedProvId("Jeonnam")}
+                    class={`map-province ${selectedProvId === 'Jeonnam' ? 'map-province-selected' : ''}`}
+                  />
+                  {/* 광주광역시 */}
+                  <path d="M 130,460 L 155,460 L 155,485 L 130,485 Z" 
+                    fill={getProvinceColor("Gwangju")} 
+                    onClick={() => setSelectedProvId("Gwangju")}
+                    class={`map-province ${selectedProvId === 'Gwangju' ? 'map-province-selected' : ''}`}
+                  />
+                  {/* 경상북도 */}
+                  <path d="M 260,210 L 310,230 L 360,240 L 370,350 L 310,410 L 260,330 Z" 
+                    fill={getProvinceColor("Gyeongbuk")} 
+                    onClick={() => setSelectedProvId("Gyeongbuk")}
+                    class={`map-province ${selectedProvId === 'Gyeongbuk' ? 'map-province-selected' : ''}`}
+                  />
+                  {/* 대구광역시 */}
+                  <path d="M 290,360 L 315,360 L 315,385 L 290,385 Z" 
+                    fill={getProvinceColor("Daegu")} 
+                    onClick={() => setSelectedProvId("Daegu")}
+                    class={`map-province ${selectedProvId === 'Daegu' ? 'map-province-selected' : ''}`}
+                  />
+                  {/* 울산광역시 */}
+                  <path d="M 335,400 L 365,400 L 365,430 L 335,430 Z" 
+                    fill={getProvinceColor("Ulsan")} 
+                    onClick={() => setSelectedProvId("Ulsan")}
+                    class={`map-province ${selectedProvId === 'Ulsan' ? 'map-province-selected' : ''}`}
+                  />
+                  {/* 경상남도 */}
+                  <path d="M 210,410 L 310,410 L 315,480 L 250,510 L 205,470 Z" 
+                    fill={getProvinceColor("Gyeongnam")} 
+                    onClick={() => setSelectedProvId("Gyeongnam")}
+                    class={`map-province ${selectedProvId === 'Gyeongnam' ? 'map-province-selected' : ''}`}
+                  />
+                  {/* 부산광역시 */}
+                  <path d="M 310,455 L 340,455 L 340,485 L 310,485 Z" 
+                    fill={getProvinceColor("Busan")} 
+                    onClick={() => setSelectedProvId("Busan")}
+                    class={`map-province ${selectedProvId === 'Busan' ? 'map-province-selected' : ''}`}
+                  />
+                  {/* 제주도 */}
+                  <path d="M 100,580 L 160,580 L 150,610 L 90,610 Z" 
+                    fill={getProvinceColor("Jeju")} 
+                    onClick={() => setSelectedProvId("Jeju")}
+                    class={`map-province ${selectedProvId === 'Jeju' ? 'map-province-selected' : ''}`}
+                  />
+                  
+                  {/* 텍스트 표기 */}
+                  <text x="175" y="145" class="text-[12px] font-bold fill-slate-800" text-anchor="middle">서울</text>
+                  <text x="180" y="215" class="text-[12px] font-bold fill-slate-800" text-anchor="middle">경기</text>
+                  <text x="100" y="165" class="text-[12px] font-bold fill-slate-800" text-anchor="middle">인천</text>
+                  <text x="280" y="150" class="text-[12px] font-bold fill-slate-800" text-anchor="middle">강원</text>
+                  <text x="240" y="270" class="text-[12px] font-bold fill-slate-800" text-anchor="middle">충북</text>
+                  <text x="130" y="270" class="text-[12px] font-bold fill-slate-800" text-anchor="middle">충남</text>
+                  <text x="220" y="300" class="text-[12px] font-bold fill-slate-800" text-anchor="middle">대전</text>
+                  <text x="160" y="375" class="text-[12px] font-bold fill-slate-800" text-anchor="middle">전북</text>
+                  <text x="130" y="495" class="text-[12px] font-bold fill-slate-800" text-anchor="middle">전남</text>
+                  <text x="110" y="455" class="text-[12px] font-bold fill-slate-800" text-anchor="middle">광주</text>
+                  <text x="310" y="290" class="text-[12px] font-bold fill-slate-800" text-anchor="middle">경북</text>
+                  <text x="315" y="350" class="text-[12px] font-bold fill-slate-800" text-anchor="middle">대구</text>
+                  <text x="365" y="390" class="text-[12px] font-bold fill-slate-800" text-anchor="middle">울산</text>
+                  <text x="260" y="460" class="text-[12px] font-bold fill-slate-800" text-anchor="middle">경남</text>
+                  <text x="345" y="480" class="text-[12px] font-bold fill-slate-800" text-anchor="middle">부산</text>
+                  <text x="125" y="605" class="text-[12px] font-bold fill-slate-800" text-anchor="middle">제주</text>
+                </svg>
+              </div>
+
+              {/* 하단 범례 */}
+              <div class="w-full flex justify-center gap-4 text-xs font-semibold text-slate-500 mt-4 border-t border-slate-100 pt-3">
+                <span class="flex items-center gap-1.5"><span class="w-3 h-3 rounded-sm bg-[#00AA7B]" />민주당 우세</span>
+                <span class="flex items-center gap-1.5"><span class="w-3 h-3 rounded-sm bg-[#0000A8]" />한나라당 우세</span>
+                <span class="flex items-center gap-1.5"><span class="w-3 h-3 rounded-sm bg-[#EE7700]" />민주노동당 우세</span>
+              </div>
+            </section>
+
+            {/* 우측: 상세 데이터 커스텀 에디터 및 전역 스윙 제어 (7단 크기) */}
+            <section class="lg:col-span-7 flex flex-col gap-6">
+              
+              {/* 시도별 상세 조정 판넬 */}
+              <div class="bg-white rounded-3xl p-6 shadow-sm border border-slate-100">
+                <div class="flex items-center justify-between border-b border-slate-100 pb-3 mb-5">
+                  <div class="flex items-center gap-3">
+                    <span class="inline-flex items-center justify-center w-8 h-8 rounded-xl bg-teal-50 text-teal-700 text-sm font-bold">
+                      <i class="fa-solid fa-sliders"></i>
+                    </span>
+                    <div>
+                      <h3 class="font-bold text-slate-800">{PROVINCE_INFO[selectedProvId].name} 상세 득표율 설정</h3>
+                      <p class="text-xs text-slate-400 font-medium">슬라이더를 이동하면 다른 후보의 표가 자동 계산되어 합산됩니다.</p>
+                    </div>
+                  </div>
+                  <span class="text-xs bg-slate-100 text-slate-600 px-3 py-1.5 rounded-full font-bold">
+                    투표 가중치: {(PROVINCE_INFO[selectedProvId].voters / 1000).toLocaleString()}k 표
+                  </span>
+                </div>
+
+                {/* 편집용 컨트롤러 */}
+                <div class="flex flex-col gap-6">
+                  {/* 새천년민주당 조정 */}
+                  <div class="p-4 bg-emerald-50/35 border border-emerald-100/50 rounded-2xl">
+                    <div class="flex justify-between items-center mb-2">
+                      <div class="flex items-center gap-2">
+                        <span class="w-3.5 h-3.5 rounded-full bg-[#00AA7B]" />
+                        <span class="text-sm font-extrabold text-emerald-900">
+                          새천년민주당 ({mdpCandidate === "roh" ? "노무현" : "이인제"})
+                        </span>
+                      </div>
+                      <span class="text-base font-black text-emerald-800">
+                        {calculatedData[selectedProvId].mdp.toFixed(1)}%
+                      </span>
+                    </div>
+                    <input 
+                      type="range" 
+                      min="0" 
+                      max={100 - calculatedData[selectedProvId].oth} 
+                      step="0.1"
+                      value={calculatedData[selectedProvId].mdp} 
+                      onChange={(e) => handleSinglePercentChange('mdp', e.target.value)}
+                      class="w-full accent-[#00AA7B] cursor-ew-resize h-2 bg-slate-200 rounded-lg"
+                    />
+                  </div>
+
+                  {/* 한나라당 조정 */}
+                  <div class="p-4 bg-blue-50/35 border border-blue-100/50 rounded-2xl">
+                    <div class="flex justify-between items-center mb-2">
+                      <div class="flex items-center gap-2">
+                        <span class="w-3.5 h-3.5 rounded-full bg-[#0000A8]" />
+                        <span class="text-sm font-extrabold text-blue-900">한나라당 (이회창)</span>
+                      </div>
+                      <span class="text-base font-black text-blue-800">
+                        {calculatedData[selectedProvId].gnp.toFixed(1)}%
+                      </span>
+                    </div>
+                    <input 
+                      type="range" 
+                      min="0" 
+                      max={100 - calculatedData[selectedProvId].oth} 
+                      step="0.1"
+                      value={calculatedData[selectedProvId].gnp} 
+                      onChange={(e) => handleSinglePercentChange('gnp', e.target.value)}
+                      class="w-full accent-[#0000A8] cursor-ew-resize h-2 bg-slate-200 rounded-lg"
+                    />
+                  </div>
+
+                  {/* 민주노동당 조정 */}
+                  <div class="p-4 bg-orange-50/35 border border-orange-100/50 rounded-2xl">
+                    <div class="flex justify-between items-center mb-2">
+                      <div class="flex items-center gap-2">
+                        <span class="w-3.5 h-3.5 rounded-full bg-[#EE7700]" />
+                        <span class="text-sm font-extrabold text-orange-900">민주노동당 (권영길)</span>
+                      </div>
+                      <span class="text-base font-black text-orange-800">
+                        {calculatedData[selectedProvId].dlp.toFixed(1)}%
+                      </span>
+                    </div>
+                    <input 
+                      type="range" 
+                      min="0" 
+                      max={100 - calculatedData[selectedProvId].oth} 
+                      step="0.1"
+                      value={calculatedData[selectedProvId].dlp} 
+                      onChange={(e) => handleSinglePercentChange('dlp', e.target.value)}
+                      class="w-full accent-[#EE7700] cursor-ew-resize h-2 bg-slate-200 rounded-lg"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* 전국 대선풍 (스윙) 조율 판넬 */}
+              <div class="bg-white rounded-3xl p-6 shadow-sm border border-slate-100">
+                <div class="flex items-center gap-3 border-b border-slate-100 pb-3 mb-5">
+                  <span class="inline-flex items-center justify-center w-8 h-8 rounded-xl bg-blue-50 text-blue-700 text-sm font-bold">
+                    <i class="fa-solid fa-wind"></i>
+                  </span>
+                  <div>
+                    <h3 class="font-bold text-slate-800">전국 대선풍 스윙 설정</h3>
+                    <p class="text-xs text-slate-400 font-medium">전체 지역의 후보자 지지율에 일률적으로 특정 % 스윙을 일으킵니다.</p>
+                  </div>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  {/* 민주당 스윙 */}
+                  <div>
+                    <div class="flex justify-between items-center mb-1 text-xs font-bold text-slate-500">
+                      <span>새천년민주당 스윙</span>
+                      <span class={`font-mono text-sm ${globalMdpSwing > 0 ? 'text-emerald-600' : globalMdpSwing < 0 ? 'text-red-500' : 'text-slate-500'}`}>
+                        {globalMdpSwing > 0 ? `+${globalMdpSwing}%` : `${globalMdpSwing}%`}
+                      </span>
+                    </div>
+                    <input 
+                      type="range" 
+                      min="-25" 
+                      max="25" 
+                      step="0.5" 
+                      value={globalMdpSwing} 
+                      onChange={(e) => setGlobalMdpSwing(parseFloat(e.target.value))} 
+                      class="w-full accent-[#00AA7B]"
+                    />
+                  </div>
+
+                  {/* 한나라당 스윙 */}
+                  <div>
+                    <div class="flex justify-between items-center mb-1 text-xs font-bold text-slate-500">
+                      <span>한나라당 스윙</span>
+                      <span class={`font-mono text-sm ${globalGnpSwing > 0 ? 'text-blue-600' : globalGnpSwing < 0 ? 'text-red-500' : 'text-slate-500'}`}>
+                        {globalGnpSwing > 0 ? `+${globalGnpSwing}%` : `${globalGnpSwing}%`}
+                      </span>
+                    </div>
+                    <input 
+                      type="range" 
+                      min="-25" 
+                      max="25" 
+                      step="0.5" 
+                      value={globalGnpSwing} 
+                      onChange={(e) => setGlobalGnpSwing(parseFloat(e.target.value))} 
+                      class="w-full accent-[#0000A8]"
+                    />
+                  </div>
+
+                  {/* 민노당 스윙 */}
+                  <div>
+                    <div class="flex justify-between items-center mb-1 text-xs font-bold text-slate-500">
+                      <span>민주노동당 스윙</span>
+                      <span class={`font-mono text-sm ${globalDlpSwing > 0 ? 'text-orange-600' : globalDlpSwing < 0 ? 'text-red-500' : 'text-slate-500'}`}>
+                        {globalDlpSwing > 0 ? `+${globalDlpSwing}%` : `${globalDlpSwing}%`}
+                      </span>
+                    </div>
+                    <input 
+                      type="range" 
+                      min="-15" 
+                      max="15" 
+                      step="0.5" 
+                      value={globalDlpSwing} 
+                      onChange={(e) => setGlobalDlpSwing(parseFloat(e.target.value))} 
+                      class="w-full accent-[#EE7700]"
+                    />
+                  </div>
+                </div>
+
+                {/* 리셋 및 퀵 프리셋 버튼 */}
+                <div class="mt-6 pt-5 border-t border-slate-100 flex flex-wrap justify-between items-center gap-3">
+                  <div class="flex gap-2">
+                    <button 
+                      onClick={() => applyPreset('lee_landslide')}
+                      class="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition-all-300"
+                    >
+                      <i class="fa-solid fa-cloud-bolt text-blue-700 mr-1.5"></i> 이회창 압승
+                    </button>
+                    <button 
+                      onClick={() => applyPreset('prog_unite')}
+                      class="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition-all-300"
+                    >
+                      <i class="fa-solid fa-handshake-angle text-emerald-600 mr-1.5"></i> 진보 단일화
+                    </button>
+                  </div>
+
+                  <div class="flex gap-2">
+                    <button 
+                      onClick={handleReset}
+                      class="px-5 py-2.5 bg-slate-800 hover:bg-slate-700 text-white text-xs font-extrabold rounded-xl transition-all-300"
+                    >
+                      <i class="fa-solid fa-rotate-left mr-1.5"></i> 초기화
+                    </button>
+                    {user && (
+                      <button 
+                        onClick={() => setSaveModalOpen(true)}
+                        class="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold rounded-xl shadow-sm transition-all-300"
+                      >
+                        <i class="fa-solid fa-cloud-arrow-up mr-1.5"></i> 시나리오 온라인 공유
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+            </section>
+          </main>
+
+          {/* 하단: 전체 16개 시도 종합 스프레드시트 데이터 테이블 */}
+          <section class="bg-white rounded-3xl p-6 shadow-sm border border-slate-100 mb-8 overflow-hidden">
+            <div class="flex flex-col md:flex-row md:items-center justify-between border-b border-slate-100 pb-4 mb-4 gap-4">
+              <div>
+                <h3 class="font-black text-slate-800 text-lg flex items-center gap-2">
+                  <i class="fa-solid fa-table-list text-teal-600"></i> 시도별 상세 득표 상태 및 투표 인프라
+                </h3>
+                <p class="text-xs text-slate-400 font-medium">대한민국 16개 시도의 득표 현황 및 전체 유권자 개표 가중치 스프레드시트입니다.</p>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="text-xs font-semibold text-slate-400">선택한 지역:</span>
+                <span class="text-sm font-extrabold text-teal-700 bg-teal-50 px-3 py-1 rounded-full">{PROVINCE_INFO[selectedProvId].name}</span>
+              </div>
+            </div>
+
+            <div class="overflow-x-auto custom-scroll">
+              <table class="w-full text-left border-collapse">
+                <thead>
+                  <tr class="bg-slate-50 text-slate-500 font-bold text-xs uppercase border-b border-slate-100">
+                    <th class="py-3.5 px-4">지역</th>
+                    <th class="py-3.5 px-4 text-right">총 투표수 (가중치)</th>
+                    <th class="py-3.5 px-4 text-center">민주당 ({mdpCandidate === 'roh' ? '노무현' : '이인제'})</th>
+                    <th class="py-3.5 px-4 text-center">한나라당 (이회창)</th>
+                    <th class="py-3.5 px-4 text-center">민주노동당 (권영길)</th>
+                    <th class="py-3.5 px-4 text-center">기타</th>
+                    <th class="py-3.5 px-4 text-center">우세 정당</th>
+                    <th class="py-3.5 px-4 text-center">지역 편집</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100 text-sm">
+                  {Object.keys(calculatedData).map(provId => {
+                    const row = calculatedData[provId];
+                    const info = PROVINCE_INFO[provId];
+                    const max = Math.max(row.mdp, row.gnp, row.dlp);
+                    
+                    let winningParty = "";
+                    let winningColor = "";
+                    if (max === row.mdp) {
+                      winningParty = "민주당";
+                      winningColor = "text-[#00AA7B] bg-emerald-50";
+                    } else if (max === row.gnp) {
+                      winningParty = "한나라당";
+                      winningColor = "text-[#0000A8] bg-blue-50";
+                    } else {
+                      winningParty = "민노당";
+                      winningColor = "text-[#EE7700] bg-orange-50";
+                    }
+
+                    return (
+                      <tr 
+                        key={provId}
+                        class={`hover:bg-slate-50/50 transition-all-300 ${selectedProvId === provId ? 'bg-teal-50/20 font-medium' : ''}`}
+                      >
+                        <td class="py-3.5 px-4 font-bold text-slate-800">{info.name}</td>
+                        <td class="py-3.5 px-4 text-right text-slate-500">{info.voters.toLocaleString()} 표</td>
+                        
+                        {/* 민주당 득표율 */}
+                        <td class="py-3.5 px-4 text-center">
+                          <span class="font-semibold text-slate-700">{row.mdp.toFixed(1)}%</span>
+                        </td>
+
+                        {/* 한나라당 득표율 */}
+                        <td class="py-3.5 px-4 text-center">
+                          <span class="font-semibold text-slate-700">{row.gnp.toFixed(1)}%</span>
+                        </td>
+
+                        {/* 민주노동당 득표율 */}
+                        <td class="py-3.5 px-4 text-center">
+                          <span class="font-semibold text-slate-700">{row.dlp.toFixed(1)}%</span>
+                        </td>
+
+                        {/* 기타 득표율 */}
+                        <td class="py-3.5 px-4 text-center text-slate-400">{row.oth.toFixed(1)}%</td>
+
+                        {/* 우세 상태 */}
+                        <td class="py-3.5 px-4 text-center">
+                          <span class={`inline-block px-2.5 py-1 rounded-full text-xs font-extrabold ${winningColor}`}>
+                            {winningParty}
+                          </span>
+                        </td>
+
+                        {/* 선택하기 버튼 */}
+                        <td class="py-3.5 px-4 text-center">
+                          <button 
+                            onClick={() => setSelectedProvId(provId)}
+                            class={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all-300 ${
+                              selectedProvId === provId 
+                                ? 'bg-teal-600 text-white' 
+                                : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                            }`}
+                          >
+                            {selectedProvId === provId ? '편집 중' : '수정'}
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          {/* 우측 하단: 온라인 공유된 시나리오 갤러리 */}
+          {user && (
+            <section class="bg-white rounded-3xl p-6 shadow-sm border border-slate-100 mb-8">
+              <div class="flex items-center gap-3 border-b border-slate-100 pb-3 mb-5">
+                <span class="inline-flex items-center justify-center w-8 h-8 rounded-xl bg-purple-50 text-purple-700 text-sm font-bold">
+                  <i class="fa-solid fa-earth-asia"></i>
+                </span>
+                <div>
+                  <h3 class="font-bold text-slate-800">공개 IF 시나리오 서버 리포트</h3>
+                  <p class="text-xs text-slate-400 font-medium">다른 사용자들이 만들고 저장한 상상의 2002년 대선 판세를 지금 로드해 보세요.</p>
+                </div>
+              </div>
+
+              {loadingScenarios ? (
+                <div class="flex items-center justify-center py-12 text-slate-400 font-bold gap-3">
+                  <i class="fa-solid fa-spinner animate-spin text-xl"></i>
+                  시나리오 수집 중...
+                </div>
+              ) : savedScenarios.length === 0 ? (
+                <div class="text-center py-12 text-slate-400 text-sm font-semibold">
+                  아직 공유된 가상 시나리오가 없습니다. 첫 시나리오를 등록해 보세요!
+                </div>
+              ) : (
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 max-h-[360px] overflow-y-auto custom-scroll pr-2">
+                  {savedScenarios.map(sc => (
+                    <div 
+                      key={sc.id} 
+                      class="p-4 bg-slate-50 hover:bg-slate-100/70 border border-slate-100 rounded-2xl flex flex-col justify-between transition-all duration-300"
+                    >
+                      <div>
+                        <div class="flex justify-between items-start gap-2">
+                          <h4 class="font-extrabold text-slate-800 text-sm line-clamp-1">{sc.title}</h4>
+                          <span class="text-[10px] bg-slate-200 text-slate-700 font-bold px-1.5 py-0.5 rounded shrink-0">
+                            {sc.mdpCandidate === 'roh' ? '노무현' : '이인제'} 후보역
+                          </span>
+                        </div>
+                        <p class="text-[11px] text-slate-400 font-semibold mt-1">
+                          전국 결과: <span class="text-slate-700 font-bold">{sc.winnerName} 당선 ({sc.winnerParty})</span>
+                        </p>
+                        <div class="flex items-center gap-3 mt-3 text-xs font-bold text-slate-500">
+                          <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-[#00AA7B]" />민주당 {sc.nationalMdp}%</span>
+                          <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-[#0000A8]" />한나라당 {sc.nationalGnp}%</span>
+                        </div>
+                      </div>
+                      
+                      <button 
+                        onClick={() => loadScenario(sc)}
+                        class="w-full mt-4 py-2 bg-white hover:bg-teal-50 border border-slate-200 hover:border-teal-300 text-slate-700 hover:text-teal-700 text-xs font-extrabold rounded-xl transition-all-300"
+                      >
+                        시뮬레이터에 세팅하기
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          )}
+
+          {/* 모달: 시나리오 저장 모달 */}
+          {saveModalOpen && (
+            <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+              <div class="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-100 relative overflow-hidden">
+                <button 
+                  onClick={() => setSaveModalOpen(false)}
+                  class="absolute top-4 right-4 text-slate-400 hover:text-slate-600 transition"
+                >
+                  <i class="fa-solid fa-xmark text-lg"></i>
+                </button>
+                <h3 class="font-black text-slate-800 text-xl flex items-center gap-2">
+                  <i class="fa-solid fa-cloud-arrow-up text-teal-600"></i> 나만의 IF 시나리오 공유
+                </h3>
+                <p class="text-xs text-slate-400 font-semibold mt-1.5">
+                  현재 지도의 지지율 구성을 서버에 박제하여 다른 유저들이 열람할 수 있도록 합니다.
+                </p>
+
+                <div class="mt-5">
+                  <label class="block text-xs font-bold text-slate-500 mb-1.5">시나리오 제목</label>
+                  <input 
+                    type="text" 
+                    placeholder="예: 이인제의 충청 대풍 및 한나라 대역전" 
+                    value={scenarioTitle}
+                    onChange={(e) => setScenarioTitle(e.target.value)}
+                    maxLength="40"
+                    class="w-full px-4 py-3 border border-slate-200 focus:border-teal-500 focus:ring-1 focus:ring-teal-500 outline-none rounded-xl text-sm font-semibold text-slate-800"
+                  />
+                </div>
+
+                <div class="mt-6 flex gap-3">
+                  <button 
+                    onClick={() => setSaveModalOpen(false)}
+                    class="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-bold rounded-xl transition-all-300"
+                  >
+                    취소
+                  </button>
+                  <button 
+                    onClick={handleSaveScenario}
+                    class="flex-1 py-3 bg-teal-600 hover:bg-teal-700 text-white text-sm font-bold rounded-xl shadow-sm transition-all-300"
+                  >
+                    서버에 올리기
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+        </div>
+      );
+    }
+
+    const rootElement = document.getElementById('root');
+    const root = ReactDOM.createRoot(rootElement);
+    root.render(<App />);
+  </script>
+</body>
+</html>
